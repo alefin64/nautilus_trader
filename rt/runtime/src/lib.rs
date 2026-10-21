@@ -31,6 +31,7 @@
 
 pub mod loader;
 pub mod sdk;
+pub mod synthetic;
 
 pub use anyhow;
 pub use indexmap;
@@ -80,4 +81,32 @@ pub fn ensure_host_build(host_fingerprint: &str) -> anyhow::Result<()> {
         "host binary was built against runtime {host_fingerprint}, but the loaded runtime is {runtime}; rebuild the host and runtime together"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn build_fingerprint_is_blake3_hex() {
+        assert_eq!(BUILD_FINGERPRINT.len(), 64);
+        assert!(BUILD_FINGERPRINT.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[rstest]
+    fn ensure_host_build_accepts_runtime_fingerprint() {
+        ensure_host_build(BUILD_FINGERPRINT).unwrap();
+    }
+
+    #[rstest]
+    fn ensure_host_build_rejects_other_fingerprint() {
+        let err = ensure_host_build("stale").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("rebuild the host and runtime together")
+        );
+    }
 }

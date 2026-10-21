@@ -49,3 +49,7 @@ ustr = { workspace = true }
 
 [build-dependencies]
 blake3 = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+toml = { workspace = true }

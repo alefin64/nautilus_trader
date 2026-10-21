@@ -39,6 +39,9 @@ use nautilus_rt::{
     },
 };
 
+#[cfg(test)]
+mod tests;
+
 nautilus_rt::strategy_plugin! {
     name: "ema-cross",
     version: env!("CARGO_PKG_VERSION"),

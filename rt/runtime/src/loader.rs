@@ -211,3 +211,68 @@ fn load_library(path: &Path) -> anyhow::Result<LoadedPlugin> {
         decl,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn strategy_plugin_config_from_toml() {
+        let config: StrategyPluginConfig = toml::from_str(
+            r#"
+            path = "target/debug/libema_cross_plugin.so"
+            type_name = "EmaCross"
+
+            [config]
+            fast_period = 10
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.path,
+            PathBuf::from("target/debug/libema_cross_plugin.so")
+        );
+        assert_eq!(config.type_name, "EmaCross");
+        assert_eq!(config.config["fast_period"], 10);
+    }
+
+    #[rstest]
+    fn strategy_plugin_config_defaults_to_null_config() {
+        let config: StrategyPluginConfig =
+            toml::from_str("path = \"plugin.so\"\ntype_name = \"EmaCross\"").unwrap();
+
+        assert!(config.config.is_null());
+    }
+
+    #[rstest]
+    fn strategy_plugin_config_rejects_unknown_fields() {
+        let result: Result<StrategyPluginConfig, _> =
+            toml::from_str("path = \"plugin.so\"\ntype_name = \"EmaCross\"\nsha = \"x\"");
+
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn load_missing_library_fails() {
+        let mut loader = PluginLoader::new();
+
+        let err = loader.load(Path::new("does/not/exist.so")).unwrap_err();
+
+        assert!(err.to_string().contains("not found"));
+        assert!(loader.plugins().is_empty());
+    }
+
+    #[rstest]
+    fn load_non_library_fails() {
+        let mut loader = PluginLoader::new();
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        let err = loader.load(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("failed to load plug-in"));
+        assert!(loader.plugins().is_empty());
+    }
+}

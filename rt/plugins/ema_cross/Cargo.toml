@@ -21,3 +21,6 @@ crate-type = ["dylib"]
 # Depend on `nautilus-rt` only; it re-exports every engine and third-party crate a strategy needs
 [dependencies]
 nautilus-rt = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
