@@ -1,0 +1,27 @@
+[package]
+name = "nautilus-backtest-runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Backtest runner that loads compiled strategy plug-ins at startup"
+categories.workspace = true
+keywords.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "nautilus-backtest"
+path = "src/main.rs"
+
+[dependencies]
+nautilus-rt = { workspace = true }
+
+clap = { workspace = true }
+toml = { workspace = true }

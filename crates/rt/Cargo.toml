@@ -1,0 +1,51 @@
+[package]
+name = "nautilus-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared runtime library and strategy plug-in SDK for the Nautilus trading engine"
+categories.workspace = true
+keywords.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+build = "build.rs"
+
+[lints]
+workspace = true
+
+# Built as a Rust `dylib` so the host binary and every strategy plug-in share
+# one copy of the engine and its process-wide state (message bus, actor
+# registry, interned strings, logger). A `cdylib` would statically embed a
+# private copy of that state in each plug-in.
+[lib]
+name = "nautilus_rt"
+crate-type = ["dylib"]
+
+[dependencies]
+nautilus-analysis = { workspace = true }
+nautilus-backtest = { workspace = true }
+nautilus-common = { workspace = true }
+nautilus-core = { workspace = true }
+nautilus-execution = { workspace = true }
+nautilus-indicators = { workspace = true }
+nautilus-model = { workspace = true }
+nautilus-plugin = { workspace = true }
+nautilus-portfolio = { workspace = true }
+nautilus-system = { workspace = true }
+nautilus-trading = { workspace = true }
+
+anyhow = { workspace = true }
+indexmap = { workspace = true }
+libloading = { workspace = true }
+log = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ustr = { workspace = true }
+
+[build-dependencies]
+blake3 = { workspace = true }

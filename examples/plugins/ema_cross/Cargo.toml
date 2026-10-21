@@ -1,0 +1,23 @@
+[package]
+name = "nautilus-example-ema-cross-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Example dual-EMA crossover strategy built as a Nautilus strategy plug-in"
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# Strategy plug-ins are Rust `dylib`s linked against the shared `nautilus-rt` runtime
+[lib]
+name = "ema_cross_plugin"
+crate-type = ["dylib"]
+
+# Depend on `nautilus-rt` only; it re-exports every engine and third-party crate a strategy needs
+[dependencies]
+nautilus-rt = { workspace = true }

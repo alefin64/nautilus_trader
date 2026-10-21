@@ -1,0 +1,16 @@
+# Backtest config for `nautilus-backtest`, matching the `engine-ema-cross` example.
+#
+#   cargo build -p nautilus-backtest-runner -p nautilus-example-ema-cross-plugin
+#   cargo run -p nautilus-backtest-runner -- --config examples/plugins/ema_cross/backtest.toml
+
+synthetic_cycles = 6
+
+[[strategies]]
+path = "target/debug/libema_cross_plugin.so"
+type_name = "EmaCross"
+
+[strategies.config]
+instrument_id = "AUD/USD.SIM"
+trade_size = "100000"
+fast_period = 10
+slow_period = 20
