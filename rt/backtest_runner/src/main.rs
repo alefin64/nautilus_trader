@@ -59,12 +59,19 @@ struct RunnerConfig {
     /// Number of synthetic up/down price cycles to generate.
     #[serde(default = "default_synthetic_cycles")]
     synthetic_cycles: usize,
+    /// Order management system of the simulated venue.
+    #[serde(default = "default_oms_type")]
+    oms_type: OmsType,
     /// Strategies to load from plug-ins.
     strategies: Vec<StrategyPluginConfig>,
 }
 
 const fn default_synthetic_cycles() -> usize {
     6
+}
+
+const fn default_oms_type() -> OmsType {
+    OmsType::Hedging
 }
 
 fn main() -> anyhow::Result<()> {
@@ -81,7 +88,7 @@ fn main() -> anyhow::Result<()> {
     engine.add_venue(
         SimulatedVenueConfig::builder()
             .venue(Venue::from("SIM"))
-            .oms_type(OmsType::Hedging)
+            .oms_type(config.oms_type)
             .account_type(AccountType::Margin)
             .book_type(BookType::L1_MBP)
             .starting_balances(vec![Money::from("1_000_000 USD")])
