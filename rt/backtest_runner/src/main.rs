@@ -30,9 +30,9 @@ use nautilus_rt::{
         config::{BacktestEngineConfig, SimulatedVenueConfig},
         engine::BacktestEngine,
     },
+    core::UnixNanos,
     execution::models::fee::{FeeModelAny, MakerTakerFeeModel},
     loader::{PluginLoader, StrategyPluginConfig},
-    core::UnixNanos,
     model::{
         data::{Data, QuoteTick},
         enums::{AccountType, BookType, OmsType},

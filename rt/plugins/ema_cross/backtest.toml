@@ -1,7 +1,9 @@
 # Backtest config for `nautilus-backtest`, matching the `engine-ema-cross` example.
 #
-#   cargo build -p nautilus-backtest-runner -p nautilus-example-ema-cross-plugin
-#   cargo run -p nautilus-backtest-runner -- --config examples/plugins/ema_cross/backtest.toml
+# From the `rt` directory:
+#
+#   cargo build
+#   cargo run --bin nautilus-backtest -- --config plugins/ema_cross/backtest.toml
 
 synthetic_cycles = 6
 

@@ -162,8 +162,9 @@ fn load_library(path: &Path) -> anyhow::Result<LoadedPlugin> {
     let library: &'static Library = Box::leak(Box::new(library));
 
     // SAFETY: `nautilus_plugin_init` has the C-ABI signature declared by `nautilus-plugin`.
-    let init: Symbol<'static, PluginInitFn> = unsafe { library.get(NAUTILUS_PLUGIN_INIT_SYMBOL) }
-        .context("missing `nautilus_plugin_init`; is this a Nautilus plug-in?")?;
+    let init: Symbol<'static, PluginInitFn> =
+        unsafe { library.get(NAUTILUS_PLUGIN_INIT_SYMBOL) }
+            .context("missing `nautilus_plugin_init`; is this a Nautilus plug-in?")?;
 
     // The host table is an opaque token that generated init thunks only check for null
     let host = NonNull::<HostVTable>::dangling();
@@ -179,12 +180,9 @@ fn load_library(path: &Path) -> anyhow::Result<LoadedPlugin> {
         .map_err(|e| anyhow::anyhow!("invalid plug-in manifest: {e}"))?;
 
     // SAFETY: Validated manifest strings are static UTF-8 strings in the library.
-    let (name, version) = unsafe {
-        (
-            manifest.plugin_name.as_str().to_string(),
-            manifest.plugin_version.as_str().to_string(),
-        )
-    };
+    let name = unsafe { manifest.plugin_name.as_str() }.to_string();
+    // SAFETY: Validated manifest strings are static UTF-8 strings in the library.
+    let version = unsafe { manifest.plugin_version.as_str() }.to_string();
 
     // SAFETY: The fingerprint symbol has the C-ABI signature declared by `FingerprintFn`.
     let fingerprint: Symbol<'static, FingerprintFn> = unsafe { library.get(FINGERPRINT_SYMBOL) }
@@ -199,11 +197,12 @@ fn load_library(path: &Path) -> anyhow::Result<LoadedPlugin> {
     );
 
     // SAFETY: The fingerprint check established that the plug-in shares this build, so the
-    // symbol has the layout of `StrategyPluginDecl`. It lives in the never-unloaded library.
-    let decl: &'static StrategyPluginDecl = unsafe {
-        let symbol: Symbol<'static, *const StrategyPluginDecl> = library.get(DECL_SYMBOL)?;
-        &**symbol
-    };
+    // symbol is a `StrategyPluginDecl` static.
+    let symbol: Symbol<'static, *const StrategyPluginDecl> =
+        unsafe { library.get(DECL_SYMBOL) }.context("missing `NAUTILUS_RT_STRATEGY_PLUGIN`")?;
+
+    // SAFETY: The symbol points to a static in the never-unloaded library.
+    let decl: &'static StrategyPluginDecl = unsafe { &**symbol };
 
     Ok(LoadedPlugin {
         name,

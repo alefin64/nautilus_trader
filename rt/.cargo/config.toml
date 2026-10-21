@@ -1,0 +1,8 @@
+# Merged with the repository root `.cargo/config.toml` when cargo runs from this directory.
+
+# Link `std` dynamically into every artifact. Without this, cargo links `std` statically into
+# the runtime `dylib` whenever the runtime is built as a primary package (`-p nautilus-rt` or
+# `--workspace`). The host and plug-ins then cannot link against it, and a stale host could
+# load it with a second copy of `std`.
+[target.'cfg(all())']
+rustflags = ["-C", "prefer-dynamic"]

@@ -23,7 +23,6 @@ members = [
   "crates/adapters/tardis",
   "crates/analysis",
   "crates/backtest",
-  "crates/backtest_runner",
   "crates/cli",
   "crates/common",
   "crates/core",
@@ -42,12 +41,10 @@ members = [
   "crates/portfolio",
   "crates/pyo3",
   "crates/risk",
-  "crates/rt",
   "crates/serialization",
   "crates/system",
   "crates/testkit",
   "crates/trading",
-  "examples/plugins/ema_cross",
   "examples/tutorials",
 ]
 
@@ -84,10 +81,8 @@ nautilus-macros = { path = "crates/macros", version = "0.66.0" }
 nautilus-model = { path = "crates/model", version = "0.66.0" }
 nautilus-network = { path = "crates/network", version = "0.66.0", default-features = false }
 nautilus-persistence = { path = "crates/persistence", version = "0.66.0" }
-nautilus-plugin = { path = "crates/plugin", version = "0.66.0" }
 nautilus-portfolio = { path = "crates/portfolio", version = "0.66.0" }
 nautilus-risk = { path = "crates/risk", version = "0.66.0" }
-nautilus-rt = { path = "crates/rt", version = "0.66.0" }
 nautilus-serialization = { path = "crates/serialization", version = "0.66.0" }
 nautilus-system = { path = "crates/system", version = "0.66.0" }
 nautilus-testkit = { path = "crates/testkit", version = "0.66.0", default-features = false }
@@ -197,7 +192,6 @@ jiff = { version = "0.2.38", default-features = false, features = [
   "tzdb-bundle-always",
 ] }
 libc = "0.2.190"
-libloading = "0.8"
 libfuzzer-sys = "0.4.13"
 log = { version = "0.4.34", features = [
   "std",

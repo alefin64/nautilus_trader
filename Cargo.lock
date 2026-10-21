@@ -5170,16 +5170,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
-
-[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5508,15 +5498,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ustr",
-]
-
-[[package]]
-name = "nautilus-backtest-runner"
-version = "0.66.0"
-dependencies = [
- "clap",
- "nautilus-rt",
- "toml 1.1.6+spec-1.1.0",
 ]
 
 [[package]]
@@ -6172,13 +6153,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "ustr",
-]
-
-[[package]]
-name = "nautilus-example-ema-cross-plugin"
-version = "0.66.0"
-dependencies = [
- "nautilus-rt",
 ]
 
 [[package]]
@@ -6857,32 +6831,6 @@ dependencies = [
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
- "ustr",
-]
-
-[[package]]
-name = "nautilus-rt"
-version = "0.66.0"
-dependencies = [
- "anyhow",
- "blake3",
- "indexmap 2.14.2",
- "libloading",
- "log",
- "nautilus-analysis",
- "nautilus-backtest",
- "nautilus-common",
- "nautilus-core",
- "nautilus-execution",
- "nautilus-indicators",
- "nautilus-model",
- "nautilus-plugin",
- "nautilus-portfolio",
- "nautilus-system",
- "nautilus-trading",
- "rust_decimal",
- "serde",
- "serde_json",
  "ustr",
 ]
 
