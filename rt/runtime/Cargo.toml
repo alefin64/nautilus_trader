@@ -33,15 +33,21 @@ nautilus-core = { workspace = true }
 nautilus-execution = { workspace = true }
 nautilus-indicators = { workspace = true }
 nautilus-model = { workspace = true }
+nautilus-persistence = { workspace = true }
 nautilus-plugin = { workspace = true }
 nautilus-portfolio = { workspace = true }
+nautilus-serialization = { workspace = true }
 nautilus-system = { workspace = true }
 nautilus-trading = { workspace = true }
 
 anyhow = { workspace = true }
+arrow = { workspace = true }
+blake3 = { workspace = true }
 indexmap = { workspace = true }
+jiff = { workspace = true }
 libloading = { workspace = true }
 log = { workspace = true }
+parquet = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -52,4 +58,6 @@ blake3 = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
+rust_decimal_macros = { workspace = true }
+tempfile = { workspace = true }
 toml = { workspace = true }

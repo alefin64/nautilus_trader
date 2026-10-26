@@ -28,13 +28,25 @@
 //! The plug-in boundary passes Rust types, which is only sound when the host, this library,
 //! and every plug-in come from one build. [`BUILD_FINGERPRINT`] identifies that build, and the
 //! [`loader`] refuses to load anything that disagrees with the loaded runtime.
+//!
+//! # Bar backtests
+//!
+//! [`sim`] runs strategies on 5-minute bars with the Bullpen fill model (orders fill at the next
+//! bar's open), account rules, and session rules. [`catalog`] reads and writes the Nautilus
+//! Parquet data catalogs it runs on, and [`sessions`] reads the trading session schedule.
 
+pub mod catalog;
 pub mod loader;
 pub mod sdk;
+pub mod sessions;
+pub mod sim;
 pub mod synthetic;
 
 pub use anyhow;
+pub use arrow;
+pub use blake3;
 pub use indexmap;
+pub use jiff;
 pub use log;
 pub use nautilus_analysis as analysis;
 pub use nautilus_backtest as backtest;
@@ -43,10 +55,13 @@ pub use nautilus_core as core;
 pub use nautilus_execution as execution;
 pub use nautilus_indicators as indicators;
 pub use nautilus_model as model;
+pub use nautilus_persistence as persistence;
 pub use nautilus_plugin as plugin;
 pub use nautilus_portfolio as portfolio;
+pub use nautilus_serialization as serialization;
 pub use nautilus_system as system;
 pub use nautilus_trading as trading;
+pub use parquet;
 pub use rust_decimal;
 pub use serde;
 pub use serde_json;

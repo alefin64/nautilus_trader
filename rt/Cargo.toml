@@ -41,23 +41,43 @@ nautilus-core = { path = "../crates/core" }
 nautilus-execution = { path = "../crates/execution" }
 nautilus-indicators = { path = "../crates/indicators" }
 nautilus-model = { path = "../crates/model" }
+nautilus-persistence = { path = "../crates/persistence" }
 nautilus-plugin = { path = "../crates/plugin" }
 nautilus-portfolio = { path = "../crates/portfolio" }
+nautilus-serialization = { path = "../crates/serialization", features = ["arrow"] }
 nautilus-system = { path = "../crates/system" }
 nautilus-trading = { path = "../crates/trading" }
 nautilus-rt = { path = "runtime" }
 
 anyhow = "1.0.104"
+# Same versions and features as the root workspace
+arrow = { version = "59.3.0", default-features = false, features = [
+  "ipc",
+  "ffi",
+] }
 blake3 = { version = "1.8.7", default-features = false, features = ["std"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 indexmap = { version = "2.14.2", features = ["serde"] }
+jiff = { version = "0.2.38", default-features = false, features = [
+  "perf-inline",
+  "serde",
+  "std",
+  "tz-fat",
+  "tzdb-bundle-always",
+] }
 log = { version = "0.4.34", features = [
   "std",
   "kv_unstable",
   "serde",
   "release_max_level_debug",
 ] }
+parquet = { version = "59.3.0", default-features = false, features = [
+  "arrow",
+  "arrow_canonical_extension_types",
+  "async",
+] }
 rust_decimal = { version = "1.43.0", features = ["serde-with-float"] }
+rust_decimal_macros = "1.40.0"
 serde = { version = "1.0.229", default-features = false, features = [
   "derive",
   "std",
@@ -76,6 +96,12 @@ libloading = "0.8"
 
 rstest = { version = "0.27.0", default-features = false }
 tempfile = "3.27.0"
+
+# Mirrors the root workspace `[patch.crates-io]` entries for the Arrow stack, so both workspaces
+# resolve the same crates
+[patch.crates-io]
+arrow = { path = "../patches/arrow-compat" }
+parquet = { path = "../patches/parquet-compat" }
 
 # Same settings as the root workspace, except where a Rust `dylib` requires otherwise
 [profile.dev]
