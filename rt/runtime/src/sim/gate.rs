@@ -190,7 +190,7 @@ impl OrderGate {
         if now.as_u64() - slot.close_ts.as_u64() > 1 {
             return Err(format!(
                 "orders are accepted only at a bar close; the last bar closed at {}",
-                slot.close_ts
+                slot.close_ts.to_rfc3339()
             ));
         }
         if slot.last {

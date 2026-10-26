@@ -351,14 +351,14 @@ fn assign_sessions(
             anyhow::ensure!(
                 previous.is_none_or(|ts| bar.ts_init > ts),
                 "bars are not in strictly increasing time order at {}",
-                bar.ts_init
+                bar.ts_init.to_rfc3339()
             );
             previous = Some(bar.ts_init);
             let start = UnixNanos::from(bar.ts_init.as_u64().saturating_sub(interval));
             let window = schedule.locate(start, bar.ts_init).with_context(|| {
                 format!(
                     "bar closing at {} is outside every session window",
-                    bar.ts_init
+                    bar.ts_init.to_rfc3339()
                 )
             })?;
             Ok(SessionBar {
@@ -400,7 +400,7 @@ fn fill_quotes(
             anyhow::ensure!(
                 bid > Decimal::ZERO,
                 "slippage makes the bid of the bar closing at {} non-positive",
-                next.bar.ts_init
+                next.bar.ts_init.to_rfc3339()
             );
             Ok(FillQuote {
                 ts: previous.bar.ts_init + ONE_NANO,

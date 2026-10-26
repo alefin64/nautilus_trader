@@ -11,6 +11,7 @@
 resolver = "2"
 members = [
   "backtest_runner",
+  "ingest",
   "plugins/ema_cross",
   "plugins/strategy",
   "runtime",

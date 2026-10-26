@@ -2374,6 +2374,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nautilus-ingest"
+version = "0.66.0"
+dependencies = [
+ "clap",
+ "nautilus-rt",
+ "rstest",
+ "tempfile",
+]
+
+[[package]]
 name = "nautilus-macros"
 version = "0.66.0"
 dependencies = [
