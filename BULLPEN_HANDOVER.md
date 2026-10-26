@@ -1,56 +1,72 @@
-# Bullpen handover: compiled strategy plug-ins for backtesting
+# Bullpen handover: compiled strategy plug-in backtests on bars
 
 Branch `rust-plugin-backtest`, based on release tag `v2.0.0rc7` (Rust crates 0.66.0).
 
 ## Status
 
-Backtests can load strategies from compiled Rust plug-ins (`.so` files) at startup. There is
-no Python anywhere in this path.
+Strategies compiled as Rust plug-ins (`.so` files) are backtested on 5-minute bars read from a
+Nautilus Parquet data catalog. There is no Python anywhere in this path.
 
-- **Correctness.** A strategy loaded as a plug-in produces the same trading log line for line
-  as the same strategy statically linked into the upstream `engine-ema-cross` example: same
-  orders, fills, positions, and statistics.
-- **Safety.** A mismatched or stale plug-in or host is refused at startup with a clear error,
+- **End to end.** `nautilus-ingest` turns raw bar files and a session schedule into one catalog
+  per data split. `nautilus-backtest` runs the strategy slot plug-in on a split and writes
+  `results.parquet`, `trades.parquet`, `returns.parquet`, and `run.json`. Verified on the
+  10-year synthetic dataset from `bullpen-synth-data`: train and validation splits of the `rth`
+  profile (see [Checks done by hand](#checks-done-by-hand)).
+- **Fill model.** Every order fills at the open of the next bar after it is sent, plus
+  per-segment slippage, never on its own bar. Commission per share with a per-order minimum,
+  borrow on shorts, and position limits come from the config, as do the session rules
+  (`overnight = "hold"` or `"flatten"`). Nothing is hard-coded.
+- **Determinism.** The same inputs give byte-identical output files, covered by a test.
+- **Safety.** A mismatched or stale plug-in or binary is refused at startup with a clear error,
   rather than running with undefined behavior.
-- **Speed.** Today it runs about 20% slower than the upstream fat-LTO static build. Almost all
-  of that comes from build settings a shared library forces, not from the plug-in boundary.
-  See [Performance](#performance).
-- **Iteration.** A strategy-only change rebuilds in about 2.5 s in release, against about
-  1 min 47 s for a statically linked fat-LTO binary.
-- **Scope.** The backtest runner is a prototype. It has one simulated FX venue (`SIM`) and
-  synthetic AUD/USD quotes. Historical data loading is the next step.
+- **Packaging.** `rt/scripts/bundle.bash` produces a self-contained directory (runner, ingest
+  tool, `libnautilus_rt.so`, `libstd-*.so`) that runs without `LD_LIBRARY_PATH`.
+- **Speed.** The template strategy runs 6.25 years of regular-hours bars (121,914 bars) in
+  0.5 s in release. A strategy-only change rebuilds in seconds.
 
 ## Where everything is
 
 All plug-in work lives in its own cargo workspace, `rt/`. The root workspace is untouched, so
 merges from upstream stay conflict-free.
 
-| Path                                    | What it is                                                                          |
-| --------------------------------------- | ----------------------------------------------------------------------------------- |
-| `rt/Cargo.toml`                         | Workspace manifest: members, shared dependencies, profiles, lints                   |
-| `rt/.cargo/config.toml`                 | Adds `-C prefer-dynamic`; required, see [Rules](#rules-and-gotchas)                 |
-| `rt/Cargo.lock`                         | Lockfile, seeded from the root `Cargo.lock` (same dependency versions)              |
-| `rt/runtime/`                           | `nautilus-rt`: the engine as one shared library, plus the plug-in SDK and loader    |
-| `rt/runtime/src/lib.rs`                 | Re-exports and the build fingerprint                                                |
-| `rt/runtime/src/sdk.rs`                 | Plug-in side: the `strategy_plugin!` macro and `StrategyRegistrar`                  |
-| `rt/runtime/src/loader.rs`              | Host side: `PluginLoader` and `StrategyPluginConfig`                                |
-| `rt/runtime/src/synthetic.rs`           | Synthetic FX scenario: venue, instrument, quote series                              |
-| `rt/runtime/build.rs`                   | Build-config guards and fingerprint computation                                     |
-| `rt/backtest_runner/`                   | `nautilus-backtest` binary: reads a TOML config, loads plug-ins, runs the backtest  |
-| `rt/backtest_runner/tests/cli.rs`       | End-to-end tests of the binary and plug-in                                          |
-| `rt/plugins/ema_cross/`                 | Example plug-in: dual-EMA crossover                                                 |
-| `rt/plugins/ema_cross/src/tests.rs`     | Example strategy tests, including an in-process backtest                            |
-| `rt/plugins/ema_cross/backtest.toml`    | Example runner config                                                               |
-| `rt/README.md`                          | Short reference for the workspace                                                   |
+| Path                                | What it is                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------- |
+| `rt/Cargo.toml`                     | Workspace manifest: members, shared dependencies, profiles, lints, patches         |
+| `rt/.cargo/config.toml`             | Adds `-C prefer-dynamic` and `-Wl,-rpath,$ORIGIN`; see [Rules](#rules-and-gotchas) |
+| `rt/Cargo.lock`                     | Lockfile, seeded from the root `Cargo.lock` (same dependency versions)             |
+| `rt/runtime/`                       | `nautilus-rt`: the engine as one shared library, plus the plug-in SDK              |
+| `rt/runtime/src/lib.rs`             | Re-exports, build fingerprint, compiler version                                    |
+| `rt/runtime/src/sdk.rs`             | Plug-in side: the `strategy_plugin!` macro and `StrategyRegistrar`                 |
+| `rt/runtime/src/loader.rs`          | Host side: `PluginLoader` and `StrategyPluginConfig`                               |
+| `rt/runtime/src/sim/`               | `BarSimulation`: fill model, costs, account and session rules, reports             |
+| `rt/runtime/src/sessions.rs`        | `SessionSchedule`: reads `sessions.parquet`                                        |
+| `rt/runtime/src/catalog.rs`         | Reads and writes instruments and bars in a Parquet catalog                         |
+| `rt/runtime/src/digest.rs`          | BLAKE3 digests of files and directory trees                                        |
+| `rt/runtime/src/synthetic.rs`       | Test scenarios: synthetic FX quotes, and the `SYNTH.XNYS` equity bar scenario      |
+| `rt/runtime/build.rs`               | Build-config guards and fingerprint computation                                    |
+| `rt/backtest_runner/`               | `nautilus-backtest`: reads a TOML config, loads plug-ins, writes the outputs       |
+| `rt/ingest/`                        | `nautilus-ingest`: raw bars and sessions to per-split catalogs                     |
+| `rt/plugins/strategy/`              | The strategy slot (frozen `Cargo.toml`) with the template strategy                 |
+| `rt/plugins/strategy-template/src/` | Pristine copy of the slot's `src/`, for seeding new strategies                     |
+| `rt/plugins/ema_cross/`             | Quote-based example plug-in, kept for parity with upstream                         |
+| `rt/scripts/bundle.bash`            | Builds in release and assembles the self-contained bundle                          |
+| `rt/README.md`                      | Short reference for the workspace                                                  |
 
 Commits on the branch, oldest first:
 
-| Commit       | Summary                                                    |
-| ------------ | ---------------------------------------------------------- |
-| `2e3d32a2ee` | Add shared runtime dylib and strategy plug-in prototype    |
-| `4679615249` | Move strategy plug-in prototype into its own rt workspace  |
-| `130a6b8947` | Make simulated venue OMS type configurable in backtest runner |
-| `0187f16047` | Add tests and shared synthetic scenario to rt workspace    |
+| Commit       | Summary                                                                  |
+| ------------ | ------------------------------------------------------------------------ |
+| `c9cb100444` | Add shared runtime dylib and strategy plug-in prototype                  |
+| `b857de7ce3` | Move strategy plug-in prototype into its own rt workspace                |
+| `488500baf5` | Make simulated venue OMS type configurable in backtest runner            |
+| `c8a6d84548` | Add tests and shared synthetic scenario to rt workspace                  |
+| `87cd6f2c5b` | Add handover guide for compiled strategy plug-in backtests               |
+| `7df67f786a` | Add bar simulation, sessions and Parquet catalog to rt runtime           |
+| `380084cca9` | Add frozen strategy slot crate with bar strategy template                |
+| `8cfac11c55` | Replace synthetic scenario in backtest runner with catalog bar backtests |
+| `a17940e599` | Add nautilus-ingest tool for per-split Parquet catalogs                  |
+| `ef9fecb945` | Package rt binaries with an $ORIGIN rpath and add build info flag        |
+| (this one)   | Update handover and rt README for bar backtests                          |
 
 ## Setup
 
@@ -70,301 +86,493 @@ rustup toolchain install nightly-2026-08-21 --profile minimal --component rustfm
 rustup component add clippy   # run inside the repo so it targets 1.99.0
 ```
 
-## Running a backtest
+A full build compiles the Parquet and DataFusion stack that `nautilus-persistence` needs: about
+8 minutes in debug on the 4-core development VM, and the `target/` directory grows to several
+gigabytes per profile.
+
+## End to end
 
 **Always run cargo from `rt/`.** Cargo reads `rt/.cargo/config.toml` based on the current
 directory, and the runtime refuses to build without it.
 
-```bash
-cd rt
-cargo build                       # runtime, runner, and all plug-ins (debug)
-cargo run --bin nautilus-backtest -- --config plugins/ema_cross/backtest.toml
-```
+### 1. Sessions file
 
-For speed, use release. Rebuild the runtime, runner, and plug-ins together, then point the
-config at `target/release/...`:
+The engine has no calendar logic. A `sessions.parquet` file lists, for every trading day and
+segment, the segment's UTC window:
+
+| Column      | Type                 | Meaning                                   |
+| ----------- | -------------------- | ----------------------------------------- |
+| `date`      | `date32`             | Trading day (exchange-local date)         |
+| `segment`   | `string`             | `pre_market`, `regular`, or `after_hours` |
+| `open_utc`  | `timestamp[ns, UTC]` | Segment start                             |
+| `close_utc` | `timestamp[ns, UTC]` | Segment end                               |
+
+The orchestrator's Python tooling produces it. Holidays, early closes, and daylight saving time
+are resolved there. For the checks below it was generated with `exchange_calendars` (XNYS) from
+a script outside the repository: pre-market 04:00 to the open, regular open to close, after-hours
+close to close + 4 h, all America/New_York converted to UTC per day (the same segments as
+`bullpen-synth-data`).
+
+### 2. Ingest
 
 ```bash
 cd rt
 cargo build --release
-sed 's#target/debug/#target/release/#' plugins/ema_cross/backtest.toml > /tmp/backtest-release.toml
-cargo run --release --bin nautilus-backtest -- --config /tmp/backtest-release.toml
+cargo run --release --bin nautilus-ingest -- \
+  --raw ../../bullpen-synth-data/out/SYNTH \
+  --sessions /path/to/sessions.parquet \
+  --profile rth --calendar XNYS --segments regular \
+  --instrument-id SYNTH.XNYS --currency USD --price-precision 4 --bar-minutes 5 \
+  --split train=2016-10-03..2022-12-31 \
+  --split validation=2023-01-01..2024-12-31 \
+  --split holdout=2025-01-01..2026-09-30 \
+  --embargo-days 7 \
+  --output /path/to/data/rth
 ```
 
-The run logs the usual engine output to stdout, ending with the performance report and one
-throughput line:
+| Flag                | Meaning                                                                       |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `--raw`             | A raw Parquet file, or a directory searched recursively for `*.parquet`       |
+| `--sessions`        | The sessions file. It must cover every raw bar                                |
+| `--profile`         | Profile name, recorded                                                        |
+| `--calendar`        | Calendar the sessions file came from, recorded                                |
+| `--segments`        | The profile's segments, comma separated                                       |
+| `--instrument-id`   | Instrument of the bars. Written as a whole-share `Equity`                     |
+| `--currency`        | Quote currency                                                                |
+| `--price-precision` | Price decimals of the instrument and bars. Raw prices must not have more      |
+| `--bar-minutes`     | Bar length. The bar type is `<instrument>-<minutes>-MINUTE-LAST-EXTERNAL`     |
+| `--split`           | `name=START..END` in trading days, inclusive, repeated in chronological order |
+| `--embargo-days`    | Calendar days removed from the end of a split before the next one starts      |
+| `--output`          | Output directory. It must not exist or be empty                               |
 
-```text
-[INFO] TRADER-001.nautilus_rt::loader: Loaded plug-in ema-cross 0.66.0 from .../libema_cross_plugin.so with strategies ["EmaCross"]
-...
-[INFO] TRADER-001.nautilus_backtest::engine: Total orders: 12
-[INFO] TRADER-001.nautilus_backtest::engine: Total positions: 12
-...
-Processed 745 quotes in 4.230ms (176121 quotes/s)
-```
+Raw files hold one row per bar: `ts_start` (`timestamp[ns, UTC]`, bar start), `open`, `high`,
+`low`, `close` (`float64`), and `volume` (`int64`). Other columns, such as `trade_count` and the
+vendor's `segment`, are ignored: segments are recomputed from the sessions file.
 
-### Running the binary outside cargo
+What it does:
 
-`cargo run` puts the runtime library and Rust's shared `std` on the library path. To run the
-binary directly, set `LD_LIBRARY_PATH` yourself. Run this from `rt/`, so `rustc` resolves to the
-pinned toolchain whose `libstd` the binary was linked against:
+1. Reads every raw bar and finds its session segment. It **fails** if any bar lies outside
+   every segment, if two bars start at the same time, if a profile segment has no raw bars, or
+   if a price has more decimals than `--price-precision`.
+2. Applies the embargo: the `embargo-days` calendar days before each split's start are removed
+   from the end of the previous split (the convention of a time-series split "gap"). With the
+   splits above, train ends 2022-12-24 and validation 2024-12-24. A split is assigned by trading
+   day, so after-hours bars of 31 December stay with 31 December.
+3. Writes, per split, `<output>/<split>/catalog/` (the instrument and the bars in the profile's
+   segments, stamped at their close: `ts_event = ts_init = ts_start + bar length`) and copies
+   the sessions file to `<output>/<split>/sessions.parquet`.
+4. Writes `<output>/ingest-manifest.json`: raw file digests and row counts, the sessions file
+   digest, instrument, profile, embargo, splits (with effective ends), row counts per segment,
+   per-split session and bar counts, first and last bar, a digest of each catalog, and
+   `data_profile_hash`. That hash covers the inputs and every parameter, so it identifies the
+   derived dataset. All digests are BLAKE3.
+
+The outputs are deterministic.
+
+### 3. Backtest
 
 ```bash
 cd rt
-export LD_LIBRARY_PATH="$PWD/target/release:$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/lib"
-target/release/nautilus-backtest --config /tmp/backtest-release.toml
+cargo run --release --bin nautilus-backtest -- --config train.toml --output out/train
 ```
 
-No rpath is set yet. Packaging a self-contained bundle is listed under [Next steps](#next-steps).
+The run prints one summary line. `--log-level info` shows the engine's full log and
+performance report (default `warn`). `nautilus-backtest --build-info` prints the engine version,
+build fingerprint, and compiler as JSON.
 
-### Config reference
+### Running the binaries outside cargo
 
-The runner config is TOML, parsed into `RunnerConfig` in `rt/backtest_runner/src/main.rs`.
-Unknown fields are errors.
+Use the bundle:
 
-| Key                  | Type            | Default     | Meaning                                                                          |
-| -------------------- | --------------- | ----------- | -------------------------------------------------------------------------------- |
-| `synthetic_cycles`   | integer         | `6`         | Number of synthetic up/down cycles. Quote count is `25 + 120 * cycles`.          |
-| `oms_type`           | string          | `"HEDGING"` | Venue order management: `"HEDGING"` or `"NETTING"`.                              |
-| `[[strategies]]`     | array of tables | required    | One entry per strategy instance (see below).                                     |
+```bash
+rt/scripts/bundle.bash            # writes rt/target/bundle/
+rt/target/bundle/nautilus-backtest --config train.toml --output out/train
+```
 
-Each `[[strategies]]` entry is a `StrategyPluginConfig` (`rt/runtime/src/loader.rs:49`):
+Every binary and library is linked with `RUNPATH $ORIGIN`, so the bundle finds
+`libnautilus_rt.so` and `libstd-*.so` in its own directory. Binaries run straight from
+`target/release/` find the runtime but not `libstd`; set
+`LD_LIBRARY_PATH="$(rustc --print target-libdir)"` from `rt/` if you do that.
 
-| Key         | Type   | Meaning                                                                                |
-| ----------- | ------ | -------------------------------------------------------------------------------------- |
-| `path`      | string | Plug-in library path. Relative paths resolve from the **process working directory**.   |
-| `type_name` | string | Strategy type exported by the plug-in, for example `"EmaCross"`.                       |
-| `config`    | table  | Instance config, passed to the plug-in's factory as JSON. Its shape is up to the strategy. |
+Plug-ins must come from the same build as the bundle: `rt/target/release/libstrategy_plugin.so`
+after `bundle.sh`, or a later `cargo build --release` with nothing changed in between.
 
-Several strategies, from one plug-in or many, can run in one backtest. Each library is loaded
-once, however many instances use it. Each instance needs a unique `strategy_id` and
-`order_id_tag`:
+## Backtest config reference
+
+The runner config is TOML, parsed into `RunnerConfig` in `rt/backtest_runner/src/config.rs`.
+Every key is required and unknown keys are errors. Relative paths resolve from the process
+working directory, not the config file.
 
 ```toml
-synthetic_cycles = 6
-oms_type = "NETTING"
+seed = 0                                      # recorded; passed to the engine's fill model
 
-[[strategies]]
-path = "target/release/libema_cross_plugin.so"
-type_name = "EmaCross"
+[data]
+catalog = "data/rth/train/catalog"            # Nautilus Parquet catalog
+sessions = "data/rth/train/sessions.parquet"  # session schedule
+instrument_id = "SYNTH.XNYS"
+bar_type = "SYNTH.XNYS-5-MINUTE-LAST-EXTERNAL"
+start = 2016-10-03                            # first trading day, inclusive
+end = 2022-12-31                              # last trading day, inclusive
 
-[strategies.config]
-instrument_id = "AUD/USD.SIM"
-trade_size = "100000"
-fast_period = 10
-slow_period = 20
+[session]
+profile = "rth"                               # recorded
+overnight = "hold"                            # "hold" or "flatten"
 
-[[strategies]]
-path = "target/release/libema_cross_plugin.so"
-type_name = "EmaCross"
+[venue]
+oms_type = "NETTING"                          # only NETTING
+account_type = "MARGIN"                       # MARGIN or CASH
+base_currency = "USD"                         # must be the instrument's quote currency
+starting_capital = 100000
+max_leverage = 1.0                            # gross exposure / equity
+max_position_pct_equity = 100
+allow_short = true
+short_borrow_bps_per_year = 50
 
-[strategies.config]
-instrument_id = "AUD/USD.SIM"
-trade_size = "50000"
-fast_period = 5
-slow_period = 40
+[fill_model]
+type = "next_bar_open"                        # the only fill model
 
-[strategies.config.base]          # engine StrategyConfig fields
-strategy_id = "EMA_CROSS-002"
-order_id_tag = "002"
+[fill_model.slippage_bps]                     # by the fill bar's session segment
+regular = 2
+pre_market = 10
+after_hours = 10
+
+[fill_model.commission]
+per_share = 0.005
+min_per_order = 1.0
+
+[[strategies]]                                # one entry per strategy instance
+path = "target/release/libstrategy_plugin.so"
+type_name = "Strategy"
+
+[strategies.config]                           # passed to the plug-in's factory as JSON
+instrument_id = "SYNTH.XNYS"
+bar_type = "SYNTH.XNYS-5-MINUTE-LAST-EXTERNAL"
+fast_period = 20
+slow_period = 80
+trade_size = "500"
+go_short = true
 ```
 
-`EmaCross` defaults `base` to `strategy_id = "EMA_CROSS-001"` and `order_id_tag = "001"`. That
-is why the second instance above sets its own `base`.
+The `[venue]`, `[fill_model]`, and `[session]` values map one to one onto
+`bullpen-platform/config/backtest.yaml` (`account`, `fill_model`) and `sessions.yaml`
+(`overnight`). Two extra keys have no counterpart there: `oms_type` and `account_type`. Dates
+may also be strings (`"2016-10-03"`). Decimal values are exact: write `0.005` or `"0.005"`.
+
+Validation rejects: anything but `NETTING`; account types other than `MARGIN` and `CASH`;
+non-positive capital, leverage, or position percentage; negative borrow, slippage, or
+commission; slippage of 10,000 bps or more; and a `CASH` account with `allow_short = true` or
+`max_leverage > 1`.
+
+Each `[[strategies]]` entry is a `StrategyPluginConfig` (`rt/runtime/src/loader.rs`):
+
+| Key         | Type   | Meaning                                                                         |
+| ----------- | ------ | ------------------------------------------------------------------------------- |
+| `path`      | string | Plug-in library path                                                            |
+| `type_name` | string | Strategy type exported by the plug-in. The slot exports `"Strategy"`            |
+| `config`    | table  | Instance config, passed to the factory as JSON. Its shape is up to the strategy |
+
+Several instances can run in one backtest, each with a unique `strategy_id` and `order_id_tag`
+in `[strategies.config.base]`. Account rules apply to the net position of all of them.
+
+## Simulation model
+
+`BarSimulation` (`rt/runtime/src/sim/mod.rs`) wraps the engine's `BacktestEngine` with one
+simulated venue for the instrument's venue (`XNYS`). The strategy and its tests use exactly the
+same code as the runner.
+
+### Fills at the next bar's open
+
+The venue never sees bars (`bar_execution = false`). Instead, one nanosecond after each bar
+closes, the data feed carries a **fill quote** built from the *next* bar's open: the ask is the
+open plus the next bar's segment slippage, rounded up to the price increment; the bid is the
+open minus slippage, rounded down. Quote sizes are large enough never to limit a fill.
+
+Orders reach the venue with a latency of one nanosecond (`StaticLatencyModel`: insert and
+modify 1 ns, cancel 0 ns). So an order sent while handling the bar that closed at `t` arrives at
+`t + 1 ns`, after the fill quote for the next bar's open, and fills against it: buys at the
+open plus slippage, sells at the open minus slippage. It can never fill on its own bar, whose
+prices are gone by then. Cancels arrive at once, before the next open.
+
+Consequences:
+
+- Resting limit and stop orders are matched only against bar opens (each fill quote), not
+  intrabar highs and lows. A stop that would have triggered intrabar fills at the next open.
+- The next bar is the next one in the catalog. Because a derived catalog holds only bars in the
+  profile's segments, an order sent on a session's last bar fills at the next session's first
+  bar, overnight gap included, with no special case.
+- A strategy that subscribes to quotes sees the fill quotes. That reveals the next open one
+  nanosecond after a bar closes, but an order sent then fills at that same open, so it gives no
+  edge.
+- Price precision matters: slippage is rounded against the trader to the increment. The ingest
+  default of 4 decimals keeps 2 bps on a $40 stock from being rounded up to a whole cent.
+
+### Costs
+
+- **Commission** (`sim/fees.rs`, `PerShareFeeModel`): `max(per_share * shares, min_per_order)`
+  per order, rounded half away from zero to cents. Each fill is charged the increase in the
+  order's total, so partial fills cost the same as one fill.
+- **Slippage**: built into the fill quote, as above. Reported as the fill price's distance from
+  the open times the quantity.
+- **Borrow** (`sim/ledger.rs`, `BorrowModule`, an engine simulation module): at each session's
+  last bar close, `short shares * close * bps / 10000 * days / 365`, where `days` is the calendar
+  days to the next trading day in the sessions file (3 over a weekend). Applied to the venue
+  account and recorded in the ledger. Positions closed intraday pay nothing.
+
+### Account and session rules
+
+A gate (`sim/gate.rs`) replaces the engine's `RiskEngine.queue_execute` endpoint, which strategy
+orders go through, and the order emulator's endpoint. It checks each command after the strategy
+callback returns, then forwards it to the risk engine or denies it with an `OrderDenied` event
+(`on_order_denied` in the strategy; modifications get `OrderModifyRejected`). It denies:
+
+- orders sent other than at a bar close (or one nanosecond after, in fill callbacks). An order
+  from a timer between bars would otherwise fill at an open that is already in the past.
+- orders on the final bar of the run, which has no next bar to fill at.
+- with `overnight = "flatten"`, orders sent at either of a session's last two bar closes.
+- emulated orders.
+- orders that would take the position short when `allow_short = false`, or whose worst case
+  (position plus all working orders on that side plus the new order) is worth more than
+  `min(max_leverage, max_position_pct_equity / 100) * equity`. Positions and equity are valued at
+  the last bar close. Reduce-only orders and contingent child orders are not limited.
+
+The engine's own margin checks are inert: the instrument has zero margin rates, so the gate is
+the single source of position limits. `CASH` accounts allow a slightly negative balance, so a
+fill above the last close does not abort the run.
+
+With `overnight = "flatten"`, an actor (`sim/flatten.rs`) fires at each session's second-to-last
+bar close, after the strategies have handled that bar. It cancels every working order and
+submits a reduce-only market order per open position, on behalf of its strategy, with client
+order ID `FLATTEN-<strategy>-<n>`. The orders fill at the open of the session's last bar. The
+gate then blocks strategy orders until the next session.
+
+### Ledger and reports
+
+The ledger (`sim/ledger.rs`) records every fill from the engine's order events, plus borrow
+charges, in exact decimals. Equity is cash plus the net position marked at a price, the same for
+margin and cash accounts. The reports (`sim/report.rs`) replay the ledger against the bars:
+
+- **Round trips**: a position per strategy from flat to flat. A reversing fill closes one and
+  opens the next; its commission and slippage are split pro rata.
+- **Daily records**: equity at each session's last bar close, with PnL and return against the
+  previous close (or the starting capital).
+- **Metrics**: see below.
+
+A simulation test checks that the ledger's final equity equals the engine's account balance to the cent.
+
+## Outputs
+
+All files are deterministic: no wall-clock times, random IDs, or paths beyond those in the
+config. Parquet files are zstd-compressed, every column nullable.
+
+### `results.parquet` (one row)
+
+| Column                                      | Meaning                                                                                                    |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `instrument_id`, `bar_type`                 | From the config                                                                                            |
+| `session_profile`, `overnight`, `seed`      | From the config                                                                                            |
+| `build_fingerprint`                         | Engine build                                                                                               |
+| `start_date`, `end_date`                    | First and last trading day with bars                                                                       |
+| `sessions`, `bars`                          | Trading days and bars simulated                                                                            |
+| `starting_capital`, `ending_equity`         | Equity at the start and at the last bar close                                                              |
+| `net_pnl`                                   | `ending_equity - starting_capital`, after all costs                                                        |
+| `gross_pnl`                                 | `net_pnl + total_costs`                                                                                    |
+| `total_costs`                               | `commissions + slippage + borrow`                                                                          |
+| `return_pct`                                | `net_pnl / starting_capital * 100`                                                                         |
+| `sharpe`                                    | Mean / sample standard deviation of daily returns * sqrt(252); null with fewer than 2 days or no variation |
+| `max_drawdown_pct`                          | Largest peak-to-trough fall of equity marked at every bar close, in % of the peak                          |
+| `trade_count`, `winning_trades`, `win_rate` | Closed round trips, those with positive net PnL, and their share                                           |
+| `fill_count`, `order_count`                 | Fills, and orders with at least one fill                                                                   |
+| `denied_orders`                             | Orders denied by the simulation's rules                                                                    |
+| `traded_notional`, `turnover`               | Total fill value, and that divided by the average daily equity                                             |
+| `exposure_pct`                              | Share of bar closes with an open position, in %                                                            |
+| `avg_gross_exposure`                        | Average position value / equity at bar closes                                                              |
+| `final_position`                            | Net shares at the end                                                                                      |
+
+Money is in the account currency, stored as `float64` from exact decimals.
+
+### `trades.parquet`
+
+One row per fill (`record = "fill"`) in the order they happened, then one row per round trip
+(`record = "position"`) in the order they opened.
+
+| Column                                          | Fill                                  | Position                                              |
+| ----------------------------------------------- | ------------------------------------- | ----------------------------------------------------- |
+| `strategy_id`, `instrument_id`                  | Owner and instrument                  | Same                                                  |
+| `side`                                          | `BUY` or `SELL`                       | `LONG` or `SHORT`                                     |
+| `quantity`                                      | Shares filled                         | Peak shares                                           |
+| `price`                                         | Fill price                            | Average entry price                                   |
+| `ts`                                            | Fill time                             | Opening fill time                                     |
+| `ts_closed`, `price_close`                      | null                                  | Closing time and average exit price (null while open) |
+| `commission`, `slippage`                        | Of the fill                           | Of the round trip                                     |
+| `pnl_gross`, `pnl_net`                          | null                                  | Realized PnL before and after commission              |
+| `open_price`, `segment`                         | Open and segment of the fill bar      | null                                                  |
+| `client_order_id`, `venue_order_id`, `trade_id` | Order and trade IDs                   | null                                                  |
+| `flatten`                                       | Whether the overnight flatten sent it | null                                                  |
+
+### `returns.parquet` (one row per trading day)
+
+`date`, `ts` (last bar close), `close`, `position` (net shares), `equity`, `pnl`, `return`
+(fraction of the previous equity), `borrow` (charged at that close). This is the series for the
+deflated Sharpe ratio and novelty correlation.
+
+### `run.json`
+
+`format` (`nautilus-backtest-run/1`), `engine` (version, build fingerprint, compiler), `config`
+(the parsed config, echoed), `inputs` (BLAKE3 of the config text, the catalog tree, the sessions
+file, and each plug-in with its name, version, and strategy types), `data` (first and last
+session, counts), `engine_totals`, `denied_orders` (count per reason), and `outputs` (BLAKE3 of
+the three Parquet files).
 
 ## Writing a strategy plug-in
 
-A plug-in is an ordinary Rust strategy, written exactly as in the engine (`StrategyCore`,
-`nautilus_strategy!`, `DataActor`), compiled as a `dylib` that depends only on `nautilus-rt`.
-The complete example below builds and runs together with `EmaCross` in one backtest.
+### The strategy slot
 
-### 1. Create the crate
-
-`rt/plugins/buy_and_hold/Cargo.toml`:
+`rt/plugins/strategy/` is the only crate a strategy author edits, and only its `src/`. Its
+`Cargo.toml` is **frozen**:
 
 ```toml
 [package]
-name = "buy-and-hold-plugin"
+name = "strategy-plugin"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 publish = false
 
 [lints]
 workspace = true
 
 [lib]
-name = "buy_and_hold_plugin"      # library file: target/<profile>/libbuy_and_hold_plugin.so
-crate-type = ["dylib"]            # a Rust dylib, not a cdylib
+name = "strategy_plugin"        # target/<profile>/libstrategy_plugin.so
+crate-type = ["dylib"]
 
 [dependencies]
-nautilus-rt = { workspace = true } # the only dependency
+nautilus-rt = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
 ```
 
-Add it to `members` in `rt/Cargo.toml`:
+`rt/Cargo.toml` and `rt/Cargo.lock` are hashed into the build fingerprint, so adding a crate or a
+dependency anywhere in the workspace changes the build and workers refuse the plug-in. Anything
+a strategy needs beyond `nautilus-rt`'s re-exports gets added to `nautilus-rt` here, in the
+engine repository.
 
-```toml
-members = [
-  "backtest_runner",
-  "plugins/buy_and_hold",
-  "plugins/ema_cross",
-  "runtime",
-]
-```
-
-### 2. Write the strategy
-
-`rt/plugins/buy_and_hold/src/lib.rs`:
-
-```rust
-//! Buys once on the first quote and holds.
-
-use std::fmt::Debug;
-
-use nautilus_rt::{
-    anyhow,
-    common::actor::DataActor,
-    model::{
-        data::QuoteTick,
-        enums::OrderSide,
-        identifiers::InstrumentId,
-        types::Quantity,
-    },
-    serde::Deserialize,
-    serde_json,
-    trading::{
-        nautilus_strategy,
-        strategy::{Strategy, StrategyConfig, StrategyCore},
-    },
-};
-
-// Exports the plug-in. Each entry maps a `type_name` to a factory taking the JSON config.
-nautilus_rt::strategy_plugin! {
-    name: "buy-and-hold",
-    version: env!("CARGO_PKG_VERSION"),
-    strategies: {
-        "BuyAndHold" => BuyAndHold::from_json,
-    },
-}
-
-/// Configuration for [`BuyAndHold`].
-#[derive(Debug, Deserialize)]
-#[serde(crate = "nautilus_rt::serde", deny_unknown_fields)] // required: serde comes via nautilus_rt
-pub struct BuyAndHoldConfig {
-    /// Base strategy configuration (`strategy_id`, `order_id_tag`, ...).
-    pub base: StrategyConfig,
-    /// Instrument to buy.
-    pub instrument_id: InstrumentId,
-    /// Quantity to buy.
-    pub trade_size: Quantity,
-}
-
-/// Buys `trade_size` on the first quote, then holds.
-pub struct BuyAndHold {
-    core: StrategyCore,
-    instrument_id: InstrumentId,
-    trade_size: Quantity,
-    bought: bool,
-}
-
-impl BuyAndHold {
-    /// Creates the strategy from its JSON config.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `config` does not deserialize into [`BuyAndHoldConfig`].
-    pub fn from_json(config: serde_json::Value) -> anyhow::Result<Self> {
-        let config: BuyAndHoldConfig = serde_json::from_value(config)?;
-        Ok(Self {
-            core: StrategyCore::new(config.base),
-            instrument_id: config.instrument_id,
-            trade_size: config.trade_size,
-            bought: false,
-        })
-    }
-}
-
-nautilus_strategy!(BuyAndHold);
-
-impl Debug for BuyAndHold {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BuyAndHold")
-            .field("instrument_id", &self.instrument_id)
-            .field("bought", &self.bought)
-            .finish()
-    }
-}
-
-impl DataActor for BuyAndHold {
-    fn on_start(&mut self) -> anyhow::Result<()> {
-        self.subscribe_quotes(self.instrument_id, None, None);
-        Ok(())
-    }
-
-    fn on_quote(&mut self, _quote: &QuoteTick) -> anyhow::Result<()> {
-        if self.bought {
-            return Ok(());
-        }
-        let order = self.order().market(
-            self.instrument_id,
-            OrderSide::Buy,
-            self.trade_size,
-            None, // time_in_force
-            None, // reduce_only
-            None, // quote_quantity
-            None, // exec_algorithm_id
-            None, // exec_algorithm_params
-            None, // tags
-            None, // client_order_id
-        );
-        self.submit_order(order, None, None, None)?;
-        self.bought = true;
-        Ok(())
-    }
-}
-```
-
-### 3. Configure and run
-
-```toml
-[[strategies]]
-path = "target/debug/libbuy_and_hold_plugin.so"
-type_name = "BuyAndHold"
-
-[strategies.config]
-instrument_id = "AUD/USD.SIM"
-trade_size = "200000"
-
-[strategies.config.base]
-strategy_id = "BUY_AND_HOLD-002"
-order_id_tag = "002"
-```
+The plug-in exports one strategy type, `"Strategy"`, so every run config uses
+`type_name = "Strategy"`. The template in `src/lib.rs` is a moving-average crossover on bar
+closes (`SmaCross`), configured with `instrument_id`, `bar_type`, `fast_period`, `slow_period`,
+`trade_size`, and `go_short`, with tests in `src/tests.rs`. A pristine copy lives in
+`rt/plugins/strategy-template/src/`:
 
 ```bash
 cd rt
-cargo build
-cargo run --bin nautilus-backtest -- --config my_backtest.toml
+rm -rf plugins/strategy/src && cp -r plugins/strategy-template/src plugins/strategy/src
 ```
 
-Run alongside the `EmaCross` example config, this reports `Total orders: 13`: 12 from
-`EmaCross` plus one from `BuyAndHold`.
+### Writing the strategy
+
+A plug-in is an ordinary Rust strategy, written exactly as in the engine (`StrategyCore`,
+`nautilus_strategy!`, `DataActor`), compiled as a `dylib` that depends only on `nautilus-rt`.
+The skeleton:
+
+```rust
+use nautilus_rt::{
+    anyhow,
+    common::actor::DataActor,
+    model::{data::{Bar, BarType}, identifiers::InstrumentId},
+    serde::Deserialize,
+    serde_json,
+    trading::{nautilus_strategy, strategy::{Strategy, StrategyConfig, StrategyCore}},
+};
+
+nautilus_rt::strategy_plugin! {
+    name: "strategy",
+    version: env!("CARGO_PKG_VERSION"),
+    strategies: {
+        "Strategy" => MyStrategy::from_json,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(crate = "nautilus_rt::serde", deny_unknown_fields)] // required: serde comes via nautilus_rt
+pub struct MyConfig {
+    pub base: StrategyConfig,
+    pub instrument_id: InstrumentId,
+    pub bar_type: BarType,
+}
+
+pub struct MyStrategy { core: StrategyCore, bar_type: BarType /* ... */ }
+
+impl MyStrategy {
+    pub fn from_json(config: serde_json::Value) -> anyhow::Result<Self> {
+        let config: MyConfig = serde_json::from_value(config)?;
+        Ok(Self { core: StrategyCore::new(config.base), bar_type: config.bar_type })
+    }
+}
+
+nautilus_strategy!(MyStrategy);
+
+impl std::fmt::Debug for MyStrategy { /* ... */ }
+
+impl DataActor for MyStrategy {
+    fn on_start(&mut self) -> anyhow::Result<()> {
+        self.subscribe_bars(self.bar_type, None, None);
+        Ok(())
+    }
+
+    fn on_bar(&mut self, bar: &Bar) -> anyhow::Result<()> {
+        // Orders sent here fill at the next bar's open
+        Ok(())
+    }
+}
+```
+
+To react to denials or fills, pass extra trait items to the macro:
+`nautilus_strategy!(MyStrategy, { fn on_order_denied(&mut self, event: OrderDenied) { ... } });`.
 
 ### Plug-in authoring checklist
 
-- Use `crate-type = ["dylib"]`, not `cdylib`. A `cdylib` embeds its own copy of the engine, so
-  its subscriptions and orders would never reach the real one.
+- Use `crate-type = ["dylib"]`, the convention. Inside `rt/`, a `cdylib` also links the shared
+  runtime and behaves identically: the earlier claim here that a `cdylib` embeds its own copy of
+  the engine was wrong for this workspace. What keeps a plug-in sound is building it in `rt/`
+  and depending only on `nautilus-rt`, not the crate type.
 - Depend on `nautilus-rt` only. Use everything through its re-exports: `nautilus_rt::model`,
   `common`, `trading`, `indicators`, `execution`, `portfolio`, `analysis`, `backtest`,
-  `system`, `core`, and third-party `anyhow`, `serde`, `serde_json`, `log`, `ustr`,
-  `indexmap`, `rust_decimal` (list in `rt/runtime/src/lib.rs`). Adding any of these directly
-  links a second copy. If you need a crate that isn't re-exported, add the re-export to
-  `nautilus-rt` rather than depending on it from the plug-in.
+  `system`, `core`, `persistence`, `serialization`, and third-party `anyhow`, `serde`,
+  `serde_json`, `log`, `ustr`, `indexmap`, `rust_decimal`, `jiff`, `arrow`, `parquet`, `blake3`
+  (list in `rt/runtime/src/lib.rs`). Adding any of these directly links a second copy.
 - Put `#[serde(crate = "nautilus_rt::serde")]` on every serde derive.
 - Avoid derives and macros that hard-code a crate path, such as `bon::Builder`. They expect that
   crate as a direct dependency.
-- `strategy_plugin!` goes once per plug-in crate, at module scope. A plug-in may export several
-  strategy types.
+- `strategy_plugin!` goes once per plug-in crate, at module scope.
 - Factory signature: `fn(serde_json::Value) -> anyhow::Result<YourStrategy>`.
+- Send orders from `on_bar` (or fill callbacks), not from timers between bars.
 - Testing-only dependencies such as `rstest` are fine under `[dev-dependencies]`.
+
+### Testing a strategy in-process
+
+The tests run the strategy straight in an engine, with no library loading, using the runner's
+own `BarSimulation` on the synthetic equity scenario (`SYNTH.XNYS`, weekdays from 2025-01-06,
+78 regular bars a day):
+
+```rust
+use nautilus_rt::{
+    sdk::StrategyRegistrar,
+    serde_json::json,
+    sim::{BarSimulation, SimConfig},
+    synthetic::EquityScenario,
+};
+
+let scenario = EquityScenario::new(5).unwrap();
+let config: SimConfig = serde_json::from_value(json!({ /* venue, fill_model, overnight, seed */ })).unwrap();
+let mut sim = BarSimulation::new(&config, scenario.instrument.clone(), scenario.bars.clone(), &scenario.schedule).unwrap();
+StrategyRegistrar::backtest(sim.engine_mut()).add_strategy(MyStrategy::from_json(json!({ /* ... */ })).unwrap()).unwrap();
+let outcome = sim.run().unwrap(); // fills, round trips, daily records, metrics
+assert_eq!(outcome.metrics.trade_count, 7);
+```
+
+Use one engine per test. The engine keeps its state per thread, and by default the test harness
+runs each test on its own thread.
 
 ## Testing
 
@@ -372,99 +580,80 @@ Run everything from `rt/`:
 
 ```bash
 cd rt
-cargo test                                         # all 27 tests
-cargo test -p nautilus-rt                          # runtime unit tests (13)
-cargo test -p nautilus-example-ema-cross-plugin    # strategy tests (7)
-cargo test -p nautilus-backtest-runner             # end-to-end tests (7)
+cargo test                                         # all 137 tests
+cargo test -p nautilus-rt                          # runtime unit tests (69)
+cargo test -p strategy-plugin                      # template strategy tests (12)
+cargo test -p nautilus-backtest-runner             # config tests (11) and end-to-end tests (14)
+cargo test -p nautilus-ingest                      # split tests (13) and end-to-end tests (11)
+cargo test -p nautilus-example-ema-cross-plugin    # quote example (7)
 cargo +nightly-2026-08-21 fmt --check
 cargo clippy --all-targets
 ```
 
-### Runtime unit tests (`rt/runtime/src`)
+What they cover:
 
-- `lib.rs`, `mod tests`: the fingerprint format, plus `ensure_host_build` accepting a matching
-  fingerprint and rejecting another.
-- `loader.rs`, `mod tests`: `StrategyPluginConfig` parsing (TOML, null default, unknown-field
-  rejection), and loading a missing file or a non-library.
-- `synthetic.rs`, `mod tests`: quote counts per cycle, one-second spacing, and the instrument
-  definition.
+- **Runtime** (`rt/runtime/src`): sessions file round trip and window lookup; catalog round
+  trip; digests; config validation; the fee model; borrow charges; round-trip accounting and
+  Sharpe; and simulation tests (`sim/tests.rs`) with a scripted strategy: fills at the next open
+  with slippage for buys and sells, fills across the overnight gap, commission minimum and
+  rounding, short-sale denial, exposure and position-percentage limits, the final-bar denial,
+  flatten exits and blocking, borrow over a weekend, the ledger matching the engine's account,
+  and metrics adding up.
+- **Strategy slot** (`rt/plugins/strategy/src/tests.rs`): config parsing and rejection, and
+  in-process backtests: pinned totals (8 orders, 7 round trips over 5 sessions), every fill at
+  the next bar's open, long-only mode.
+- **Runner** (`rt/backtest_runner`): config parsing, every value required, rejection of bad
+  values; end-to-end runs of the real binary and plug-in on a generated catalog, with the same
+  totals as the in-process test; **byte-identical outputs across two runs**
+  (`outputs_are_deterministic`); flatten; date-range selection; `--build-info`; and each setup
+  error path.
+- **Ingest** (`rt/ingest`): split parsing and embargo; end-to-end runs on generated raw files
+  with deliberately wrong vendor `segment` labels: catalogs per split equal to the source bars,
+  embargo, extended profiles, profile hash, deterministic manifest, and failures for a bar
+  outside every session, a missing segment, too many decimals, empty and overlapping splits, a
+  bad segment name, and a non-empty output directory.
 
-### Strategy tests (`rt/plugins/ema_cross/src/tests.rs`)
+### Checks done by hand
 
-This file is the template for testing your own strategies. They run **in-process**: the test
-adds the strategy straight to an engine, with no library loading.
+Synthetic dataset: `bullpen-synth-data/out/SYNTH` (10 years, all segments), sessions generated
+with `exchange_calendars` 4.13 for 2016-09-01 to 2026-10-30, profile `rth`, the splits and
+embargo above.
 
-- `from_json_*`: config parsing, defaults, overrides, and rejection of bad input.
-- `backtest_on_synthetic_quotes` (line 91): a full backtest on the shared synthetic scenario.
-  It asserts the same totals as the upstream `engine-ema-cross` example: 745 iterations,
-  24 events, 12 orders, 12 positions.
+- **Ingest**: 376,646 raw bars (105,414 pre-market, 195,180 regular, 76,052 after-hours), all
+  inside a session segment. 194,556 regular bars in splits: train 1,569 sessions and 121,914
+  bars (2016-10-03 to 2022-12-23), validation 498 and 38,664 (2023-01-03 to 2024-12-24, last
+  bar at the 13:00 ET early close), holdout 437 and 33,978. 0.7 s in debug.
+- **Backtests** of the template (`fast_period = 20`, `slow_period = 80`, `trade_size = 500`,
+  shorting on, the `backtest.yaml` placeholder account and fill values), from the release bundle
+  without `LD_LIBRARY_PATH`:
+  - train: 1,852 round trips, net PnL -38,642.11 (gross -5,235.00, costs 33,407.11: commission
+    9,262.50, slippage 23,630.20, borrow 514.41), Sharpe -0.42, max drawdown 54.8%.
+  - validation: 615 round trips, net PnL -32,269.01, Sharpe -1.45.
+  - validation with `overnight = "flatten"`: 497 flatten exits, no position at any session
+    close, no borrow, 504 strategy orders denied on session-closing bars.
 
-The pattern for your own strategy:
+  A crossover with no edge loses to costs on data without a planted effect, as expected.
+- **Spot checks of the files**: the first train fill sells 500 at 41.9916 against an open of
+  42.00 (2 bps down, rounded down to the increment); its round trip's PnL and pro-rata
+  commission; the first borrow charge (500 * 41.87 * 0.5% / 365 = 0.29).
+- **Determinism on the real data**: two train runs give byte-identical files.
+- **`cdylib` plug-in**: with the slot temporarily built as a `cdylib`, the library still links
+  `libnautilus_rt.so`, exports only the three plug-in symbols (against about 1,200 for the
+  `dylib`), and the runner's end-to-end tests pass with the same totals.
+- **Feature stability**: after a full workspace build, `cargo build -p strategy-plugin` reuses the
+  same `nautilus-rt`. The runner's and ingest tool's own dependencies (`clap`, `toml`) do not
+  change the runtime's features.
 
-```rust
-use nautilus_rt::{
-    backtest::{config::BacktestEngineConfig, engine::BacktestEngine},
-    model::enums::OmsType,
-    sdk::StrategyRegistrar,
-    serde_json::json,
-    synthetic,
-};
-use rstest::rstest;
+Checks from the prototype, still valid:
 
-use super::*;
-
-#[rstest]
-fn backtest_on_synthetic_quotes() {
-    let mut engine = BacktestEngine::new(BacktestEngineConfig::default()).unwrap();
-    let instrument_id =
-        synthetic::add_venue_and_instrument(&mut engine, OmsType::Hedging).unwrap();
-    let config = json!({ "instrument_id": "AUD/USD.SIM", "trade_size": "100000" /* ... */ });
-    StrategyRegistrar::backtest(&mut engine)
-        .add_strategy(MyStrategy::from_json(config).unwrap())
-        .unwrap();
-    engine
-        .add_data(synthetic::generate_quotes(instrument_id, 6), None, true, true)
-        .unwrap();
-
-    engine.run(None, None, None, false).unwrap();
-
-    let result = engine.get_result(); // BacktestResult: iterations, totals, stats
-    assert_eq!(result.total_orders, 12);
-}
-```
-
-Use one backtest engine per test. The engine keeps its state per thread, and by default the test
-harness runs each test on its own thread. Running several engines one after another on one
-thread (for example with `--test-threads=1`) has not been tested.
-
-### End-to-end tests (`rt/backtest_runner/tests/cli.rs`)
-
-These run the real `nautilus-backtest` binary with the real plug-in library.
-
-- `plugin_path()` (line 33) runs `cargo build -p nautilus-example-ema-cross-plugin` with the
-  same profile as the binary under test. The plug-in is only loadable by a runtime from the
-  same build, so it must match.
-- `runs_plugin_strategy`: loads the plug-in and asserts the `engine-ema-cross` totals.
-- `netting_venue_with_more_cycles`: the `oms_type` and `synthetic_cycles` options.
-- `rejects_unknown_strategy_type`, `rejects_library_without_plugin_symbols`,
-  `rejects_missing_plugin`, `rejects_invalid_strategy_config`, `rejects_unknown_runner_field`:
-  each error path and its message.
-
-### Checks done by hand (not automated)
-
-These were verified manually while building the prototype:
-
-- **Parity with the static build.** The upstream example
-  (`cargo run -p nautilus-backtest --features examples --example engine-ema-cross` from the
-  repo root) and the plug-in runner produce identical logs, after removing wall-clock
-  timestamps, UUIDs, PID, and dependency-version banner lines.
-- **Stale host binary.** Edit any engine source, rebuild only the runtime
+- **Parity with the static build.** The upstream `engine-ema-cross` example and the plug-in
+  produce identical logs, after removing wall-clock timestamps, UUIDs, PID, and banner lines.
+  `ema_cross`'s in-process test keeps asserting the upstream totals.
+- **Stale binary.** Edit any engine source, rebuild only the runtime
   (`cargo build -p nautilus-rt`), then run the old `nautilus-backtest`. Result:
   `host binary was built against runtime <a>, but the loaded runtime is <b>; rebuild the host and runtime together`.
 - **Stale plug-in.** Same edit, rebuild only the runner, then load the old plug-in. Result:
   `plug-in 'ema-cross' was built against runtime <a>, but the loaded runtime is <b>; rebuild the plug-in with the runtime`.
-  The stale library loaded without error at the OS level, because symbol names didn't change.
-  The fingerprint check is the only thing that caught it.
 - **Wrong directory.** Building with `cargo build --manifest-path rt/Cargo.toml` from the repo
   root fails with:
   `nautilus-rt must be built with -C prefer-dynamic; run cargo from the rt directory ...`.
@@ -474,34 +663,38 @@ These were verified manually while building the prototype:
 ### One engine, shared
 
 The engine is compiled once into `libnautilus_rt.so` (`crate-type = ["dylib"]` in
-`rt/runtime/Cargo.toml`). The host binary and every plug-in link it dynamically, together with
-Rust's shared `libstd`. The engine's process-wide state is therefore a single copy: message bus,
-actor registry, clocks, logger, and interned strings.
+`rt/runtime/Cargo.toml`), now including the Parquet catalog stack (`nautilus-persistence`). The
+binaries and every plug-in link it dynamically, together with Rust's shared `libstd`. The
+engine's process-wide state is therefore a single copy: message bus, actor registry, clocks,
+logger, and interned strings.
 
-A plug-in is small: the example is 480 KB in release, against a 22 MB runtime. It contains
-only its own code and the generic engine code it instantiates.
+Every crate in the workspace depends only on `nautilus-rt` plus `clap` and `toml`, which the
+runtime library does not link (`toml` is only a build dependency inside the engine), so building
+one package (`-p strategy-plugin`) resolves the runtime with the same features as a full build. Keep it that way: a binary that
+depends on an engine crate or a re-exported crate directly would change the runtime's features
+for builds that include it.
 
 ### Loading sequence
 
-1. **Host build check.** `rt/backtest_runner/src/main.rs:66` calls
+1. **Host build check.** `main` in `rt/backtest_runner/src/main.rs` calls
    `nautilus_rt::ensure_host_build(nautilus_rt::BUILD_FINGERPRINT)`. The constant is compiled
-   into the host, and the runtime compares it with its own fingerprint.
-2. **Config.** For each `[[strategies]]` entry, `PluginLoader::add_backtest_strategy`
-   (`rt/runtime/src/loader.rs:131`) loads the library, or reuses it if already loaded.
-3. **Verification.** `load_library` (`rt/runtime/src/loader.rs:156`) verifies in this order,
-   each step trusting only what earlier steps established:
+   into the binary, and the runtime compares it with its own fingerprint.
+2. **Config.** For each `[[strategies]]` entry, `PluginLoader::add_backtest_strategy` loads the
+   library, or reuses it if already loaded.
+3. **Verification.** `load_library` (`rt/runtime/src/loader.rs`) verifies in this order, each
+   step trusting only what earlier steps established:
    1. The C-ABI `nautilus_plugin_init` manifest from upstream's `nautilus-plugin` crate: ABI
-      version, plus model precision mode (`loader.rs:178`).
+      version, plus model precision mode.
    2. The C-ABI `nautilus_rt_plugin_fingerprint`, which must equal the loaded runtime's
-      fingerprint (`loader.rs:195`).
-   3. Only then the Rust-ABI `NAUTILUS_RT_STRATEGY_PLUGIN` declaration (`loader.rs:205`).
+      fingerprint.
+   3. Only then the Rust-ABI `NAUTILUS_RT_STRATEGY_PLUGIN` declaration.
 4. **Registration.** The plug-in's generated `register` function deserializes the config with
-   the factory. It then calls `StrategyRegistrar::add_strategy` (`rt/runtime/src/sdk.rs:80`),
-   which calls `BacktestEngine::add_strategy` with the plug-in's concrete strategy type. No
-   wrapper or dynamic dispatch sits on the hot path.
-5. **Lifetime.** Libraries are never unloaded (`loader.rs:161`).
+   the factory. It then calls `StrategyRegistrar::add_strategy` (`rt/runtime/src/sdk.rs`), which
+   calls `BacktestEngine::add_strategy` with the plug-in's concrete strategy type. No wrapper or
+   dynamic dispatch sits on the hot path.
+5. **Lifetime.** Libraries are never unloaded.
 
-`strategy_plugin!` (`rt/runtime/src/sdk.rs:103`) generates all three exported symbols.
+`strategy_plugin!` (`rt/runtime/src/sdk.rs`) generates all three exported symbols.
 
 ### Build fingerprint
 
@@ -510,45 +703,59 @@ when the host, runtime, and plug-ins come from one build. `rt/runtime/build.rs` 
 everything that defines "one build":
 
 - `rustc -vV` output, target, profile, opt-level, debug, panic strategy, target features, and
-  rustflags (`BUILD_ENV_KEYS`, `build.rs:31`).
+  rustflags (`BUILD_ENV_KEYS` in `build.rs`).
 - `rt/Cargo.lock`, `rt/Cargo.toml`, and the root `Cargo.toml` (feature and version specs of
   engine dependencies).
 - Every `.rs` and `.toml` file under `crates/` (engine sources) and `rt/runtime/`.
 
-The result is `nautilus_rt::BUILD_FINGERPRINT` (`rt/runtime/src/lib.rs:60`). A constant is
-evaluated where it is used, so each plug-in and host records the fingerprint it was compiled
-against. `runtime_fingerprint()` (`lib.rs:65`) reports the fingerprint of the library actually
-loaded.
+The result is `nautilus_rt::BUILD_FINGERPRINT`. A constant is evaluated where it is used, so each
+plug-in and binary records the fingerprint it was compiled against. `runtime_fingerprint()`
+reports the fingerprint of the library actually loaded. `nautilus_rt::RUSTC_VERSION` is the
+first line of `rustc -vV`.
 
-**In practice:** build the runtime, runner, and plug-ins together with one `cargo build` from
+**In practice:** build the runtime, binaries, and plug-ins together with one `cargo build` from
 `rt/`, and ship them together.
 
 ### Why `-C prefer-dynamic` and the separate workspace
 
 Cargo passes `-C prefer-dynamic` to a `dylib` only when building it as a dependency. When the
 runtime itself is the package being built (`-p nautilus-rt`, or `--workspace`), cargo links
-`std` statically into it. The host and plug-ins can then no longer link, and an already-built
-host could load it with a second copy of `std` without the fingerprint changing.
-`rt/.cargo/config.toml` always passes the flag, and `check_build_config` (`build.rs:100`)
-refuses to build without it.
+`std` statically into it. The binaries and plug-ins can then no longer link, and an already-built
+binary could load it with a second copy of `std` without the fingerprint changing.
+`rt/.cargo/config.toml` always passes the flag, and `check_build_config` in `build.rs` refuses
+to build without it.
 
 Keeping this in a separate workspace also lets `rt/` use the profiles a dylib needs (see
 below) without touching upstream's.
 
 ## Performance
 
-Measured on the 4-core development VM. Workload: the same EMA-cross strategy on 960,025
-synthetic quotes, with a `NETTING` venue. Each variant ran 7 times, interleaved, and the table
-shows the median.
+### Bar backtests
 
-| Variant                                                     | Quotes/s | vs today's static |
-| ----------------------------------------------------------- | -------- | ----------------- |
-| Static, fat LTO, `panic = "abort"` (upstream release)       | 423,979  | baseline          |
-| Static, fat LTO, `panic = "unwind"`                         | 404,815  | −4.5%             |
-| Static, no LTO, unwind (same flags as plug-in build)        | 340,707  | −19.6%            |
-| **Plug-in, stable** (what this branch builds)               | 340,895  | −19.6%            |
-| Plug-in, nightly, no LTO (control for the row below)        | 328,298  | −22.6%            |
-| Plug-in, nightly, `-Zdylib-lto` fat LTO inside the runtime  | 362,710  | −14.5%            |
+Release build on the 4-core development VM, template strategy, `rth` profile:
+
+| Run        | Bars    | Sessions | Simulation | Whole process |
+| ---------- | ------- | -------- | ---------- | ------------- |
+| train      | 121,914 | 1,569    | 0.50 s     | 0.63 s        |
+| validation | 38,664  | 498      | 0.16 s     | 0.23 s        |
+
+Medians of three runs from the bundle; "whole process" includes loading the catalog and writing
+the outputs. The engine processes two data points per bar (the bar and the fill quote).
+Ingesting the whole dataset takes 0.35 s.
+
+### Plug-in boundary (prototype measurements)
+
+Measured on the same VM with the quote-based EMA-cross strategy on 960,025 synthetic quotes, a
+`NETTING` venue, 7 interleaved runs per variant, median:
+
+| Variant                                                    | Quotes/s | vs today's static |
+| ---------------------------------------------------------- | -------- | ----------------- |
+| Static, fat LTO, `panic = "abort"` (upstream release)      | 423,979  | baseline          |
+| Static, fat LTO, `panic = "unwind"`                        | 404,815  | −4.5%             |
+| Static, no LTO, unwind (same flags as plug-in build)       | 340,707  | −19.6%            |
+| **Plug-in, stable** (what this branch builds)              | 340,895  | −19.6%            |
+| Plug-in, nightly, no LTO (control for the row below)       | 328,298  | −22.6%            |
+| Plug-in, nightly, `-Zdylib-lto` fat LTO inside the runtime | 362,710  | −14.5%            |
 
 Rebuild after a strategy-only change (release): **2.5 s** for the plug-in, against
 **1 min 47 s** for the static fat-LTO binary.
@@ -556,77 +763,68 @@ Rebuild after a strategy-only change (release): **2.5 s** for the plug-in, again
 What this means:
 
 - **The plug-in boundary itself costs 0–3%**: the plug-in row against the static row with the
-  same flags. An earlier 7-round run measured 2.8%.
+  same flags.
 - **The cost is in build settings that a `dylib` forces.** Losing fat LTO costs about 14%.
   `panic = "unwind"`, required because Rust's shared `std` is built to unwind, costs about 5%.
   `rt/Cargo.toml` therefore uses `lto = false` and `panic = "unwind"` in release.
-- **Nightly `-Zdylib-lto` recovers about 10% of that** (against its nightly control), but needs
-  a nightly compiler for production builds. It also cannot inline across the shared `std`,
-  which is part of what static fat LTO gains. Not adopted. To reproduce it, build from `rt/`
-  with `cargo +nightly-2026-08-21 build --release --target-dir <dir>`, using a `RUSTC_WRAPPER`
-  script that does two things. It appends `-C embed-bitcode=yes --cap-lints=warn` to every
-  rustc call. When `--crate-name nautilus_rt` is present, it also adds
-  `-C lto=fat -Zdylib-lto`. Note that nightly cargo places `libnautilus_rt.so` in
-  `<dir>/release`, not `<dir>/release/deps`.
-- **Benchmark with `NETTING`.** With `HEDGING`, every crossover opens a position that never
-  nets off, and per-quote portfolio work grows with the open-position count. Long runs then
-  slow down quadratically: 960k quotes ran at about 3,900 quotes/s.
-
-The static comparison binaries came from a throwaway crate outside the repository. It was a
-copy of the runner that links `nautilus_trading::examples::strategies::EmaCross` statically,
-built with the root release profile and with the `rt` release profile.
+- **Nightly `-Zdylib-lto` recovers about 10% of that**, but needs a nightly compiler for
+  production builds. Not adopted. To reproduce it, build from `rt/` with
+  `cargo +nightly-2026-08-21 build --release --target-dir <dir>`, using a `RUSTC_WRAPPER` script
+  that appends `-C embed-bitcode=yes --cap-lints=warn` to every rustc call and, when
+  `--crate-name nautilus_rt` is present, adds `-C lto=fat -Zdylib-lto`.
+- **Benchmark with `NETTING`.** With `HEDGING`, per-quote portfolio work grows with the
+  open-position count and long runs slow down quadratically.
 
 ## Rules and gotchas
 
 - **Run cargo from `rt/`.** From anywhere else, `rt/.cargo/config.toml` is not read and the
   runtime build fails by design.
-- **Rebuild and ship host, runtime, and plug-ins together.** Any mismatch is refused at
-  startup. That is intended: it prevents undefined behavior.
-- **Plug-ins depend only on `nautilus-rt`** (see the checklist above).
-- **Relative plug-in paths resolve from the working directory**, not from the config file's
-  location.
+- **Rebuild and ship binaries, runtime, and plug-ins together.** Any mismatch is refused at
+  startup. That is intended: it prevents undefined behavior. Changing `rt/.cargo/config.toml`
+  changes rustflags, so it rebuilds everything and changes the fingerprint.
+- **Plug-ins depend only on `nautilus-rt`** (see the checklist above), and the strategy slot's
+  `Cargo.toml` stays frozen.
+- **Relative paths resolve from the working directory**, not from the config file's location.
 - **Libraries are loaded once at startup and never unloaded.** There is no mid-run swap, by
   design.
-- **`sha256` is not supported.** Upstream's live `PluginConfig` has a `sha256` field, but
-  `StrategyPluginConfig` does not, and rejects it as an unknown field.
-- **Only Linux was tested.** The code uses portable APIs (`libloading`,
-  `std::env::consts::DLL_PREFIX/SUFFIX`), but macOS and Windows have not been built.
+- **`sha256` is not supported** in `[[strategies]]`. Upstream's live `PluginConfig` has it;
+  `StrategyPluginConfig` rejects it as an unknown field. `run.json` records each plug-in's
+  BLAKE3 digest instead.
+- **Only Linux was tested.** The `$ORIGIN` rpath is Linux-only; other platforms need their own
+  equivalent.
 - **The root repository's checks do not cover `rt/`.** `make pre-flight` and the root CI only
   see the root workspace. Run the commands under [Testing](#testing) yourself.
 - **`rt/Cargo.lock` is separate from the root lockfile.** When pulling upstream, re-seed it so
   versions match the root again: `cp Cargo.lock rt/`, then run `cargo build` from `rt/` to prune
-  it and add `rt`-only crates (currently just `libloading`). Then run the cooldown check.
-  `scripts/check-cargo-cooldown.sh` (3-day crate age policy) checks every tracked lockfile,
-  including `rt/Cargo.lock`. `bash scripts/check-cargo-cooldown.sh --lock rt/Cargo.lock --all`
-  currently passes for all 190 crates. `libloading 0.8.9` is recorded in
-  `.supply-chain/crate-dates.json`.
-- **Upstream `[patch.crates-io]` entries are not mirrored yet.** The root patches `arrow` and
-  `parquet`, which the current dependency graph doesn't use. Copy them into `rt/Cargo.toml`
-  when adding the Parquet data catalog.
+  it and add `rt`-only crates (currently just `libloading`). Then run the cooldown check:
+  `bash scripts/check-cargo-cooldown.sh --lock rt/Cargo.lock --all` (passes for all 346 crates
+  today; 35 of them are looked up on crates.io because the root's
+  `.supply-chain/crate-dates.json` does not list them).
+- **The root `[patch.crates-io]` entries for `arrow` and `parquet` are mirrored** in
+  `rt/Cargo.toml`. They patch Arrow 57, which the `rt` graph does not use, so cargo warns that
+  they are unused. Keep them in step with the root.
 
 ## Next steps
 
 Roughly in priority order:
 
-1. **Historical data.** Replace the synthetic scenario with the Parquet data catalog
-   (`nautilus-persistence`): instruments and data from config. This needs the `arrow`/`parquet`
-   patches above.
-2. **Venue and engine config from TOML.** Multiple venues and instruments, fee and fill models,
-   and `BacktestEngineConfig` options, instead of the fixed `SIM` venue.
-3. **Parameter sweeps.** Run many configs in parallel, one engine per thread, writing results
-   (`BacktestResult`) to disk. This is where the 2.5 s rebuild pays off.
-4. **Packaging.** A release bundle (host, `libnautilus_rt.so`, `libstd-*.so`, plug-ins) with
-   `-Wl,-rpath,$ORIGIN`, so no `LD_LIBRARY_PATH` is needed.
-5. **Performance.** Decide whether the ~20% gap matters for your workloads. Options:
-   - Accept it.
-   - Adopt nightly `-Zdylib-lto`.
-   - Add a "frozen" mode that statically links a chosen set of strategies with fat LTO, for
-     long production sweeps.
+1. **Engine build image.** Build `rt/` once in CI at a fixed path (`bullpen-images`,
+   `engine-build`), run `scripts/bundle.bash` for the worker image, and give agent images the
+   full `rt/` workspace and `target/`.
+2. **Holdout and Monte Carlo runs.** The runner already takes any split; Monte Carlo needs
+   slippage and fee noise and parameter jitter as config, and trade-list post-processing on
+   `trades.parquet`.
+3. **Multiple symbols.** One instrument per run today. Running several symbols means one venue,
+   several instruments, and position limits per symbol.
+4. **Parameter sweeps in one process.** Several configs, one engine per thread, sharing the
+   loaded data.
+5. **Performance.** Decide whether the ~20% `dylib` gap matters for sweep workloads: accept it,
+   adopt nightly `-Zdylib-lto`, or add a frozen mode that statically links a chosen strategy.
 6. **Live trading.** Implement upstream's stubbed `LiveNode` plug-in hooks
-   (`crates/live/src/node/mod.rs`, `load_configured_plugins`/`add_plugin`) with the same loader.
+   (`crates/live/src/node/mod.rs`) with the same loader.
 7. **Remove Python.** The planned "soft rip": delete `python/` and `crates/pyo3`, keep the
    `cfg(feature = "python")` code dormant, and fail CI if `pyo3` appears in the dependency
-   tree. A "hard rip" only if upstream merges become too painful.
+   tree.
 8. **CI for `rt/`.** A job running fmt, clippy, and tests from `rt/`.
 9. **macOS and Windows** builds and tests.
 
