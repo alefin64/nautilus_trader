@@ -61,24 +61,34 @@ const RUN_FORMAT: &str = "nautilus-backtest-run/1";
 #[command(about = "Run a bar backtest of strategies loaded from compiled plug-ins")]
 struct Cli {
     /// Path to the backtest TOML config.
-    #[arg(long)]
-    config: PathBuf,
+    #[arg(long, required_unless_present = "build_info")]
+    config: Option<PathBuf>,
     /// Directory to write the output files to. Created if missing.
-    #[arg(long)]
-    output: PathBuf,
+    #[arg(long, required_unless_present = "build_info")]
+    output: Option<PathBuf>,
     /// Engine log level on stdout: off, error, warn, info, debug, or trace.
     #[arg(long, default_value = "warn")]
     log_level: LevelFilter,
+    /// Print the engine version, build fingerprint, and compiler as JSON, then exit.
+    #[arg(long, exclusive = true)]
+    build_info: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     nautilus_rt::ensure_host_build(nautilus_rt::BUILD_FINGERPRINT)?;
 
     let cli = Cli::parse();
-    let text = fs::read_to_string(&cli.config)
-        .with_context(|| format!("failed to read config '{}'", cli.config.display()))?;
+    if cli.build_info {
+        println!("{}", serde_json::to_string_pretty(&build_info())?);
+        return Ok(());
+    }
+    let (Some(config_path), Some(output_dir)) = (&cli.config, &cli.output) else {
+        anyhow::bail!("--config and --output are required");
+    };
+    let text = fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read config '{}'", config_path.display()))?;
     let config = RunnerConfig::from_toml(&text)
-        .with_context(|| format!("invalid config '{}'", cli.config.display()))?;
+        .with_context(|| format!("invalid config '{}'", config_path.display()))?;
 
     let data = &config.data;
     let schedule = SessionSchedule::read_parquet(&data.sessions)?;
@@ -117,7 +127,7 @@ fn main() -> anyhow::Result<()> {
     let outcome = sim.run()?;
     let elapsed = started.elapsed();
 
-    write_outputs(&cli.output, &config, &text, &loader, &outcome)?;
+    write_outputs(output_dir, &config, &text, &loader, &outcome)?;
 
     let metrics = &outcome.metrics;
     println!(
@@ -132,8 +142,16 @@ fn main() -> anyhow::Result<()> {
             .map_or_else(|| "n/a".to_string(), |s| format!("{s:.3}")),
         metrics.max_drawdown_pct,
     );
-    println!("Wrote results to {}", cli.output.display());
+    println!("Wrote results to {}", output_dir.display());
     Ok(())
+}
+
+fn build_info() -> serde_json::Value {
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "build_fingerprint": nautilus_rt::BUILD_FINGERPRINT,
+        "rustc": nautilus_rt::RUSTC_VERSION,
+    })
 }
 
 // Time range of the configured trading days, for the catalog query
@@ -210,11 +228,7 @@ fn write_outputs(
     let totals = &outcome.totals;
     let run = json!({
         "format": RUN_FORMAT,
-        "engine": {
-            "version": env!("CARGO_PKG_VERSION"),
-            "build_fingerprint": nautilus_rt::BUILD_FINGERPRINT,
-            "rustc": nautilus_rt::RUSTC_VERSION,
-        },
+        "engine": build_info(),
         "config": config,
         "inputs": {
             "config_blake3": nautilus_rt::blake3::hash(config_text.as_bytes()).to_hex().as_str(),
@@ -223,8 +237,8 @@ fn write_outputs(
             "plugins": plugins,
         },
         "data": {
-            "first_bar": outcome.daily.first().map(|_| outcome.metrics.start_date.to_string()),
-            "last_bar": outcome.daily.last().map(|_| outcome.metrics.end_date.to_string()),
+            "first_session": outcome.metrics.start_date.to_string(),
+            "last_session": outcome.metrics.end_date.to_string(),
             "sessions": outcome.metrics.sessions,
             "bars": outcome.metrics.bars,
         },

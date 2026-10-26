@@ -326,7 +326,8 @@ impl OrderGate {
     fn deny(&self, orders: &[OrderAny], reason: &str) {
         let ts = self.now();
         for order in orders {
-            log::warn!(
+            // The engine logs the resulting `OrderDenied` event itself
+            log::debug!(
                 "Order {} DENIED by bar simulation: {reason}",
                 order.client_order_id()
             );
@@ -351,7 +352,7 @@ impl OrderGate {
     }
 
     fn reject_modify(&self, modify: &ModifyOrder, reason: &str) {
-        log::warn!(
+        log::debug!(
             "Modify of {} REJECTED by bar simulation: {reason}",
             modify.client_order_id
         );

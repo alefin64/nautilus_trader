@@ -338,3 +338,22 @@ fn rejects_library_without_plugin_symbols() {
     assert!(!output.status.success());
     assert!(text.contains("missing `nautilus_plugin_init`"), "{text}");
 }
+
+#[rstest]
+fn prints_build_info() {
+    let output = Command::new(RUNNER).arg("--build-info").output().unwrap();
+
+    assert!(output.status.success());
+    let info: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(info["build_fingerprint"], nautilus_rt::BUILD_FINGERPRINT);
+    assert_eq!(info["rustc"], nautilus_rt::RUSTC_VERSION);
+    assert!(nautilus_rt::RUSTC_VERSION.starts_with("rustc "));
+}
+
+#[rstest]
+fn requires_config_and_output() {
+    let output = Command::new(RUNNER).output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--config"));
+}

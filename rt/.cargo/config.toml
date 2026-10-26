@@ -6,3 +6,9 @@
 # load it with a second copy of `std`.
 [target.'cfg(all())']
 rustflags = ["-C", "prefer-dynamic"]
+
+# Look for shared libraries next to the binary or library first. A bundle that puts the
+# executables, `libnautilus_rt.so`, and the toolchain's `libstd-*.so` in one directory then runs
+# without `LD_LIBRARY_PATH`. Merged with the repository root's Linux linker flags.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
