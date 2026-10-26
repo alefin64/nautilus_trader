@@ -36,6 +36,7 @@
 //! Parquet data catalogs it runs on, and [`sessions`] reads the trading session schedule.
 
 pub mod catalog;
+pub mod digest;
 pub mod loader;
 pub mod sdk;
 pub mod sessions;
@@ -73,6 +74,10 @@ pub use ustr;
 /// the fingerprint it was compiled against. Compare it with [`runtime_fingerprint`] to detect a
 /// stale artifact.
 pub const BUILD_FINGERPRINT: &str = env!("NAUTILUS_RT_FINGERPRINT");
+
+/// Version line of the compiler that built the code that references it, for example
+/// `rustc 1.99.0 (...)`.
+pub const RUSTC_VERSION: &str = env!("NAUTILUS_RT_RUSTC_VERSION");
 
 /// Returns the build fingerprint of the runtime library loaded in this process.
 #[inline(never)]

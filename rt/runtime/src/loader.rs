@@ -36,7 +36,7 @@ use anyhow::Context;
 use libloading::{Library, Symbol};
 use nautilus_backtest::engine::BacktestEngine;
 use nautilus_plugin::{HostVTable, NAUTILUS_PLUGIN_INIT_SYMBOL, PluginInitFn};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     runtime_fingerprint,
@@ -44,7 +44,7 @@ use crate::{
 };
 
 /// Configuration for one strategy instance provided by a plug-in.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StrategyPluginConfig {
     /// Path to the plug-in library.

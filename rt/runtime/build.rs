@@ -70,7 +70,12 @@ fn main() {
             env::var(key).unwrap_or_default().as_bytes(),
         );
     }
-    hash_field(&mut hasher, "rustc", rustc_version().as_bytes());
+    let rustc = rustc_version();
+    hash_field(&mut hasher, "rustc", rustc.as_bytes());
+    println!(
+        "cargo:rustc-env=NAUTILUS_RT_RUSTC_VERSION={}",
+        rustc.lines().next().unwrap_or_default()
+    );
 
     let mut sources = files.to_vec();
     for dir in &source_dirs {
