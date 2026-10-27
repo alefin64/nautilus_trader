@@ -832,7 +832,7 @@ Roughly in priority order:
 
 On the development VM:
 
-- **Global git identity:** `alefin64 <lefinfamily@gmail.com>` in `~/.gitconfig`.
+- **Global git identity:** `Zach Lefin <zachlefin@gmail.com>` in `~/.gitconfig` (was `alefin64 <lefinfamily@gmail.com>` until the repos moved to the `bullpenorg` org on 2026-10-27).
 - **apt packages:** `build-essential clang lld pkg-config gpg jq`.
 - **HashiCorp apt repository:** the existing source was missing its keyring
   (`/usr/share/keyrings/hashicorp-archive-keyring.gpg`). The current signing key was installed
